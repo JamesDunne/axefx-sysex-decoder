@@ -55,35 +55,6 @@ func main() {
 	// Bytes 0x00 to 0x1E bytes are the name of the cab
 	// Byte 0x1F being 0xA0 probably indicates UltraRes IR?
 
-	// UltraRes mode contains exactly 170 samples
-	// Total binary size is 0x2000, subtract 0x20 for name+indicator leaves 0x1FE0 bytes for samples
-	// 0x1FE0 (8,160) divided by 170 is exactly 48 bytes per sample
-	// Perhaps some 4- or 8-byte offset into those 48 bytes contains an IEEE float32 or float64
-	// that will yield our IR sample for WAV export?
+	// UltraRes mode contains exactly 170ms of sample data
 
-	const floatSize = 4
-nextoffset:
-	for offs := 0; offs < 48-floatSize; offs += 1 {
-		rawName := fname + fmt.Sprintf("%02d", offs) + extRaw
-
-		fmt.Print("::: ")
-		fmt.Println(offs)
-		samples := make([]byte, 0, 170*floatSize)
-		x := 0x20 + offs
-		for i := 0; i < 170; i++ {
-			sample := rawBytes[x : x+floatSize]
-			f32 := math.Float32frombits(binary.LittleEndian.Uint32(sample))
-			//f64 := math.Float64frombits(binary.BigEndian.Uint64(sample))
-			if math.IsNaN(float64(f32)) {
-				os.Remove(rawName)
-				continue nextoffset
-			}
-
-			samples = append(samples, sample...)
-			fmt.Printf("%v\n", f32)
-			x += 48
-		}
-
-		ioutil.WriteFile(rawName, samples, 0644)
-	}
 }
