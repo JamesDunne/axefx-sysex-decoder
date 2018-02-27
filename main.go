@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io/ioutil"
-	"math"
 	"os"
 )
 
@@ -13,7 +12,7 @@ func main() {
 	fname := `MoP - Rhythm L`
 	extIn := `.syx`
 	extBin := `.bin`
-	extRaw := `.raw`
+	//extRaw := `.raw`
 
 	f, err := os.Open(fname + extIn)
 	if err != nil {
@@ -21,40 +20,75 @@ func main() {
 	}
 	defer f.Close()
 
-	x := make([]byte, 4)
-	rawBytes := make([]byte, 0, 2048*4)
-	syxBytes := make([]byte, 5)
+	rawBytes := make([]byte, 0, 10240)
+	ob := make([]byte, 1)
+	msg := make([]byte, 0, 4+0xA0+1)
 
-	f.Read(x[0:1])
-	f.Seek(3, os.SEEK_CUR)
-	f.Read(x[0:1])
-	f.Seek(6, os.SEEK_CUR)
-	for k := 0; k < 64; k++ {
-		// skip sysex header F0 00 01 74 03 7B 20 00
-		f.Seek(8, os.SEEK_CUR)
+	hdr := make([]byte, 4)
 
-		for m := 0; m < 32; m++ {
-			// Read 5 bytes:
-			f.Read(syxBytes)
-
-			// Convert 5x 7-bit values (35 bits) into 4x 8-bit values (32 bits):
-			rawUint32 := (uint32(syxBytes[0])&0x7F | (uint32(syxBytes[1])&0x7F)<<7 | (uint32(syxBytes[2])&0x7F)<<14 | (uint32(syxBytes[3])&0x7F)<<21 | (uint32(syxBytes[4])&0x7F)<<28)
-			// TODO: are the extra 3 bits being used?
-
-			// Write as 4 bytes:
-			binary.LittleEndian.PutUint32(x, rawUint32)
-			rawBytes = append(rawBytes, x...)
+	msgs := 0
+	// Read SysEx blocks:
+reading:
+	for {
+		// read SysEx header F0 00 01 74
+		f.Read(hdr)
+		if hdr[0] != 0xF0 || hdr[1] != 0x00 || hdr[2] != 0x01 || hdr[3] != 0x74 {
+			break
 		}
 
-		// skip sysex checksum:
-		f.Seek(2, os.SEEK_CUR)
+		// Read until 0xF7:
+		msg = msg[0:0]
+		ob[0] = byte(0xF0)
+		for i := 0; ob[0] != 0xF7; i++ {
+			n, err := f.Read(ob)
+			if n <= 0 || err != nil {
+				break reading
+			}
+			if ob[0] == 0xF7 {
+				break
+			}
+
+			msg = append(msg, ob[0])
+		}
+
+		// 03 7B 20 00 is a data packet for IR:
+		if msg[0] == 0x03 && msg[1] == 0x7B {
+			msgs++
+			data7 := msg[4 : len(msg)-1]
+			data := make([]byte, len(data7)*4/5)
+			j := 0
+			for i := 0; i < len(data7); i += 5 {
+				if data7[i+4]&^0x0F != 0 {
+					panic("Unexpected extra bits in final byte of 5-byte string")
+				}
+				b := sysexToRaw(data7[i : i+5])
+				binary.LittleEndian.PutUint32(data[j:j+4], b)
+				j += 4
+			}
+			rawBytes = append(rawBytes, data...)
+		}
+
+		// Final message:
+		if msg[0] == 0x03 && msg[1] == 0x7C {
+			b := sysexToRaw(msg[2 : 2+5])
+			data := make([]byte, 4)
+			binary.LittleEndian.PutUint32(data[0:4], b)
+			fmt.Println(data)
+		}
 	}
 
 	ioutil.WriteFile(fname+extBin, rawBytes, 0644)
 
+	// fmt.Printf("%v\n", msgs)
+	// fmt.Printf("%v\n", len(rawBytes))
+
 	// Bytes 0x00 to 0x1E bytes are the name of the cab
 	// Byte 0x1F being 0xA0 probably indicates UltraRes IR?
 
-	// UltraRes mode contains exactly 170ms of sample data
+	// UltraRes mode contains exactly 170ms of sample data in 0x1FE0 bytes
+	// means 1,000 ms / 48,000 Hz = 0.02083 ms / 1 sample * 8,160 samples = 170 ms
+}
 
+func sysexToRaw(data7 []byte) uint32 {
+	return uint32(data7[0]&0x7F) | uint32(data7[1]&0x7F)<<7 | uint32(data7[2]&0x7F)<<14 | uint32(data7[3]&0x7F)<<21 | uint32(data7[4]&0x0F)<<28
 }
